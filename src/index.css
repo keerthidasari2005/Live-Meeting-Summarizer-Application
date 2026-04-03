@@ -1,0 +1,203 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 180 10% 98%;
+    --foreground: 210 25% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 25% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 25% 10%;
+    --primary: 258 90% 66%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 258 30% 94%;
+    --secondary-foreground: 258 70% 28%;
+    --muted: 170 15% 93%;
+    --muted-foreground: 210 10% 45%;
+    --accent: 258 65% 66%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 175 20% 88%;
+    --input: 175 20% 88%;
+    --ring: 258 90% 66%;
+    --radius: 0.75rem;
+
+    --gradient-start: 195 85% 48%;
+    --gradient-end: 258 90% 66%;
+    --glass: 0 0% 100% / 0.7;
+    --glass-border: 258 30% 85%;
+    --glow: 258 90% 66% / 0.15;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 210 15% 25%;
+    --sidebar-primary: 258 90% 66%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 258 30% 94%;
+    --sidebar-accent-foreground: 258 70% 28%;
+    --sidebar-border: 175 20% 90%;
+    --sidebar-ring: 258 90% 66%;
+
+    font-family: 'DM Sans', sans-serif;
+  }
+
+  .dark {
+    --background: 220 25% 8%;
+    --foreground: 180 10% 92%;
+    --card: 220 25% 11%;
+    --card-foreground: 180 10% 92%;
+    --popover: 220 25% 11%;
+    --popover-foreground: 180 10% 92%;
+    --primary: 258 90% 66%;
+    --primary-foreground: 220 25% 8%;
+    --secondary: 258 20% 16%;
+    --secondary-foreground: 258 60% 66%;
+    --muted: 220 20% 16%;
+    --muted-foreground: 210 10% 55%;
+    --accent: 258 65% 66%;
+    --accent-foreground: 220 25% 8%;
+    --destructive: 0 62% 30%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 20% 18%;
+    --input: 220 20% 18%;
+    --ring: 258 90% 66%;
+
+    --gradient-start: 195 85% 48%;
+    --gradient-end: 258 90% 66%;
+    --glass: 220 25% 12% / 0.8;
+    --glass-border: 258 20% 22%;
+    --glow: 258 90% 66% / 0.12;
+
+    --sidebar-background: 220 25% 10%;
+    --sidebar-foreground: 180 10% 85%;
+    --sidebar-primary: 258 90% 66%;
+    --sidebar-primary-foreground: 220 25% 8%;
+    --sidebar-accent: 258 20% 16%;
+    --sidebar-accent-foreground: 258 60% 66%;
+    --sidebar-border: 220 20% 18%;
+    --sidebar-ring: 258 90% 66%;
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply rounded-xl border backdrop-blur-xl;
+    background: hsl(var(--glass));
+    border-color: hsl(var(--glass-border));
+    box-shadow: 0 4px 30px hsl(var(--glow));
+  }
+  .gradient-bg {
+    background: linear-gradient(135deg, hsl(var(--gradient-start)), hsl(var(--gradient-end)));
+  }
+  .gradient-text {
+    background: linear-gradient(135deg, hsl(var(--gradient-start)), hsl(var(--gradient-end)));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .glow-border {
+    box-shadow: 0 0 20px hsl(var(--glow)), 0 0 60px hsl(var(--glow));
+  }
+  .dashboard-panel {
+    @apply border border-white/75 backdrop-blur-2xl dark:border-white/10;
+    background-color: rgba(255, 255, 255, 0.72);
+    box-shadow: 0 28px 80px -42px rgba(106, 84, 188, 0.42);
+  }
+  .dashboard-panel-subtle {
+    @apply border border-white/75 backdrop-blur-xl dark:border-white/10;
+    background-color: rgba(255, 255, 255, 0.68);
+    box-shadow: 0 24px 70px -44px rgba(106, 84, 188, 0.36);
+  }
+  .dashboard-surface {
+    @apply border border-slate-100 dark:border-white/10;
+    background-color: rgba(255, 255, 255, 0.88);
+    box-shadow: 0 26px 70px -46px rgba(106, 84, 188, 0.4);
+  }
+  .dashboard-surface-soft {
+    @apply border border-white/80 dark:border-white/10;
+    background-color: rgba(255, 255, 255, 0.82);
+    box-shadow: 0 24px 60px -46px rgba(106, 84, 188, 0.42);
+  }
+  .dashboard-title {
+    @apply text-slate-900 dark:text-slate-100;
+  }
+  .dashboard-strong {
+    @apply text-slate-800 dark:text-slate-100;
+  }
+  .dashboard-copy {
+    @apply text-slate-700 dark:text-slate-200;
+  }
+  .dashboard-muted {
+    @apply text-slate-500 dark:text-slate-400;
+  }
+  .dashboard-faint {
+    @apply text-slate-400 dark:text-slate-500;
+  }
+  .dashboard-icon-button {
+    @apply rounded-full p-2 text-slate-400 transition hover:bg-violet-50 hover:text-violet-600 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-violet-300;
+  }
+  .dashboard-soft-chip {
+    @apply border border-violet-100 bg-violet-50/80 dark:border-violet-500/20 dark:bg-violet-500/10;
+  }
+  .dashboard-soft-pill {
+    @apply bg-violet-50/70 dark:bg-violet-500/10;
+  }
+  .dashboard-soft-block {
+    background-color: rgba(255, 255, 255, 0.8);
+  }
+  .dark .dashboard-panel {
+    background-color: rgba(2, 6, 23, 0.5);
+  }
+  .dark .dashboard-panel-subtle {
+    background-color: rgba(2, 6, 23, 0.42);
+  }
+  .dark .dashboard-surface {
+    background-color: rgba(2, 6, 23, 0.6);
+  }
+  .dark .dashboard-surface-soft {
+    background-color: rgba(2, 6, 23, 0.55);
+  }
+  .dark .dashboard-soft-block {
+    background-color: rgba(15, 23, 42, 0.72);
+  }
+}
+
+/* Fix for browser autofill background on glassmorphism */
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus, 
+input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 1000px rgba(255, 255, 255, 0) inset !important;
+    -webkit-text-fill-color: white !important;
+    transition: background-color 5000s ease-in-out 0s;
+    background-color: transparent !important;
+}
+
+.night-mountain-container {
+  background: linear-gradient(rgba(0,0,0,0.3), rgba(0,0,0,0.3)), 
+              linear-gradient(135deg, #1a1c2c 0%, #4a1942 40%, #8b2f6a 100%);
+  background-size: cover;
+  background-position: center;
+}
