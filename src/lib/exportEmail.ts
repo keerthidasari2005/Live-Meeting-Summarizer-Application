@@ -17,10 +17,10 @@ function getExportEmailEndpoints() {
   const endpoints = new Set<string>();
 
   if (API_BASE_URL) {
-    endpoints.add(`${API_BASE_URL}/api/send-export-email`);
+    endpoints.add(`${API_BASE_URL}/send-email`);
   }
 
-  endpoints.add("/api/send-export-email");
+  endpoints.add("/send-email");
   return Array.from(endpoints);
 }
 
@@ -59,11 +59,8 @@ export async function sendExportEmail({
 }: SendExportEmailOptions) {
   const normalizedEmail = normalizeEmail(toEmail);
   const requestBody = JSON.stringify({
-    to_email: normalizedEmail,
-    report_title: title,
-    report_text: reportText,
-    export_format: format,
-    visual_section: visualSection,
+    email: normalizedEmail,
+    summary: reportText,
   });
 
   let lastNetworkError: unknown = null;

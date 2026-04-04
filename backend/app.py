@@ -46,33 +46,24 @@ class EmailServiceError(RuntimeError):
     pass
 
 
-resend.api_key = os.getenv("RESEND_API_KEY", "").strip()
+resend.api_key = os.environ.get("RESEND_API_KEY")
 
 
+# -----------------------------
+# Email Sending Function (NEW)
+# -----------------------------
 def send_email(to_email, subject, content):
-    if not resend.api_key:
-        raise EmailServiceError(
-            "Email service not configured. Please set RESEND_API_KEY in environment variables."
-        )
-
-    if not to_email or "@" not in to_email:
-        raise EmailServiceError("Invalid recipient email address.")
-
-    if not content:
-        raise EmailServiceError("Email content is required.")
-
-    from_email = os.getenv("FROM_EMAIL", "onboarding@resend.dev").strip()
-
     try:
         resend.Emails.send({
-            "from": from_email,
+            "from": "onboarding@resend.dev",  # You can later replace with your domain
             "to": [to_email],
             "subject": subject,
-            "html": f"<pre>{content}</pre>",
+            "html": f"<pre>{content}</pre>"
         })
-        return {"success": True}
+        return True
     except Exception as e:
-        raise EmailServiceError(f"Failed to send email: {str(e)}")
+        print("Email Error:", str(e))
+        return False
 
 
 def resolve_upload_folder():
@@ -746,32 +737,30 @@ def create_app():
                 "response": "I'm having trouble connecting right now. Please try again in a moment."
             }), 502
 
-    @app.route("/send-export-email", methods=["POST"])
-    @app.route("/api/send-export-email", methods=["POST"])
-    def send_export_email_endpoint():
-        data = request.get_json(silent=True) or {}
-        to_email = str(data.get("to_email") or "").strip()
-        report_text = str(data.get("report_text") or "").strip()
-
-        if not to_email:
-            return jsonify({
-                "error": "Recipient email is required."
-            }), 400
-
-        if not report_text:
-            return jsonify({
-                "error": "Report content is required."
-            }), 400
-
+    @app.route("/send-email", methods=["POST"])
+    def send_email_route():
         try:
-            send_email(to_email, "Meeting Summary", report_text)
-            return jsonify({"success": True}), 200
-        except EmailServiceError as e:
-            app.logger.warning("Email export failed: %s", e)
-            return jsonify({"error": str(e)}), 502
+            data = request.get_json()
+
+            recipient_email = data.get("email")
+            summary = data.get("summary")
+
+            if not recipient_email or not summary:
+                return jsonify({"error": "Missing email or summary"}), 400
+
+            success = send_email(
+                recipient_email,
+                "Meeting Summary",
+                summary
+            )
+
+            if success:
+                return jsonify({"success": True}), 200
+            else:
+                return jsonify({"error": "Failed to send email"}), 500
+
         except Exception as e:
-            app.logger.error("Unexpected error in email export: %s", e)
-            return jsonify({"error": "Failed to send export email."}), 500
+            return jsonify({"error": str(e)}), 500
 
     @app.errorhandler(RequestEntityTooLarge)
     def handle_large_file(_error):
