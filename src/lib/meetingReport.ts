@@ -489,6 +489,13 @@ export function buildPrintableSummaryReport(summary: MeetingSummary, options: Pr
   const participants = uniqueItems(summary.participants);
   const aiInsights = buildAiInsights(summary, contentType, transcript);
 
+  const riskLevel = getMeaningfulRisks(summary).length > 0 ? "Medium-High" : "Low-Medium";
+  const reportObjective = `The objective of this report is to provide a comprehensive analysis of the ${reportTitle.toLowerCase()}, highlighting key discussion points, decisions, action items, and recommendations for follow-up.`;
+  const documentProfile = [
+    `The ${reportTitle.toLowerCase()} included ${participants.length} participant(s) and covered ${getMeaningfulKeyPoints(summary).length || 1} key discussion point(s).`,
+    `${getMeaningfulDecisions(summary).length} formal decision(s) were documented, and ${getMeaningfulRisks(summary).length} concern(s) or risk(s) were identified.`,
+  ];
+
   return [
     REPORT_HEADER,
     REPORT_CLASSIFICATION,
@@ -497,45 +504,72 @@ export function buildPrintableSummaryReport(summary: MeetingSummary, options: Pr
     REPORT_SEPARATOR,
     "",
     `Generated: ${formatReportTimestamp(generatedAt || meetingDate || summary.date)}`,
-    `Meeting Title: ${reportTitle}`,
-    `Participants: ${participants.length > 0 ? participants.join(", ") : "Not identified"}`,
-    `Duration: ${normalizeDuration(duration)}`,
+    `Overall Risk Rating: ${riskLevel}. ${getMeaningfulRisks(summary).length > 0 ? getMeaningfulRisks(summary)[0] || "Key risks identified in the meeting discussion." : "No significant risks identified in the meeting discussion."}`,
+    `Report Type: Meeting Summary Report: ${overview.substring(0, 100)}${overview.length > 100 ? "..." : ""}`,
     "",
     REPORT_SEPARATOR,
     "",
-    "EXECUTIVE SUMMARY",
+    "Report Objective",
+    reportObjective,
+    "",
+    "Document Profile",
+    ...documentProfile.map((line) => `• ${line}`),
+    "",
+    REPORT_SEPARATOR,
+    "",
+    "Executive Summary",
     overview,
     "",
     REPORT_SEPARATOR,
     "",
-    "KEY DISCUSSION POINTS",
-    formatEnterpriseBulletSection(getMeaningfulKeyPoints(summary), DEFAULT_INSIGHT),
+    "Overall Risk Rating",
+    `${riskLevel}. ${getMeaningfulRisks(summary).length > 0 ? getMeaningfulRisks(summary)[0] || "Key risks identified." : "No significant risks identified."}`,
     "",
     REPORT_SEPARATOR,
     "",
-    "DECISIONS MADE",
-    formatEnterpriseBulletSection(getMeaningfulDecisions(summary), NO_DECISIONS),
+    "Critical Issues",
+    formatEnterpriseBulletSection(getMeaningfulRisks(summary).slice(0, 3), "No critical issues identified."),
     "",
     REPORT_SEPARATOR,
     "",
-    "ACTION ITEMS",
-    formatEnterpriseBulletSection(getFormattedActionItems(summary), NO_ACTIONS),
+    "Key Obligations",
+    formatEnterpriseBulletSection(getMeaningfulKeyPoints(summary).slice(0, 3), "No key obligations specified."),
     "",
     REPORT_SEPARATOR,
     "",
-    "RISKS / CONCERNS",
-    formatEnterpriseBulletSection(getMeaningfulRisks(summary), DEFAULT_RISK),
+    "Missing Protections / Negotiation Gaps",
+    formatEnterpriseBulletSection(
+      [
+        ...getMeaningfulDecisions(summary).slice(0, 2).map((d) => `Follow-up needed on: ${d}`),
+      ],
+      "No negotiation gaps identified.",
+    ),
     "",
     REPORT_SEPARATOR,
     "",
-    "AI INSIGHTS",
-    formatEnterpriseBulletSection(aiInsights, DEFAULT_INSIGHT),
+    "Recommended Actions",
+    formatEnterpriseBulletSection(
+      getFormattedActionItems(summary).slice(0, 4).length > 0
+        ? getFormattedActionItems(summary).slice(0, 4)
+        : aiInsights.slice(0, 3),
+      "No action items identified.",
+    ),
     "",
     REPORT_SEPARATOR,
     "",
-    "CONCLUSION",
+    "Conclusion",
     conclusion,
     "",
     REPORT_SEPARATOR,
-  ].join("\n");
+    "",
+    "Appendix - Supporting Notes",
+    ...aiInsights.slice(0, 3).map((note) => `• ${note}`),
+    participants.length > 0 ? `• Participants identified: ${participants.join(", ")}` : "",
+    `• Duration: ${normalizeDuration(duration)}`,
+    "",
+    REPORT_SEPARATOR,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
+
