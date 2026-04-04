@@ -27,7 +27,7 @@ On top of that, the app also includes:
 - OTP-based signup and password reset using EmailJS
 - A dashboard with workspace switching, reports, analytics, notes, and calendar views
 - PDF and DOCX export
-- Email delivery for exported reports through SMTP
+- Email delivery for exported reports through SMTP or Resend
 - A floating AI chat assistant that uses Groq directly from the frontend
 
 ## Tech Stack
@@ -38,7 +38,7 @@ On top of that, the app also includes:
 - Media processing: `ffmpeg`
 - Email:
   - EmailJS for OTP emails
-  - SMTP for sending exported report attachments
+  - SMTP or Resend for sending exported report emails
 - Storage:
   - Browser `localStorage` and `sessionStorage` for frontend data
   - `backend/storage` for uploaded files, chunks, jobs, transcripts, and summaries
@@ -82,7 +82,7 @@ On top of that, the app also includes:
   - Splits large files into chunks
   - Calls Groq for transcription and summarization
   - Returns progress and final output
-  - Sends exported reports through SMTP
+  - Sends exported reports through SMTP or Resend
 
 ### Legacy / partial pieces
 
@@ -196,7 +196,7 @@ Expected template variables:
 - `{{otp_expiry_minutes}}`
 - `{{app_name}}`
 
-### SMTP for exporting reports by email
+### SMTP or Resend for exporting reports by email
 
 Required if you want the "Email" buttons for exports to work:
 
@@ -210,6 +210,12 @@ Required if you want the "Email" buttons for exports to work:
 - `MAIL_MAX_ATTACHMENT_MB`
 
 Legacy `SMTP_*` names are also supported by the backend.
+
+Optional Resend fallback values:
+
+- `RESEND_API_KEY`
+- `RESEND_FROM_EMAIL`
+- `RESEND_FROM_NAME`
 
 ### Upload processing controls
 
@@ -268,6 +274,7 @@ Available backend endpoints:
 - `GET /api/status/<job_id>`
 - `GET /api/jobs/<job_id>`
 - `POST /api/send-export-email`
+  - Compatible aliases: `POST /api/send-email`, `POST /send-email`
 
 ## Data Storage Model
 
@@ -307,7 +314,7 @@ Users can export summaries in two ways:
 - Download as `PDF`
 - Download as `DOCX`
 
-They can also email the generated export through the Flask backend if SMTP is configured.
+They can also email the generated export through the Flask backend if SMTP or Resend is configured.
 
 Report generation and formatting are handled in:
 

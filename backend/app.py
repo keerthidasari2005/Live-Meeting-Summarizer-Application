@@ -1,8 +1,12 @@
+import html
 import logging
 import mimetypes
 import os
+import smtplib
+import ssl
 import tempfile
 import wave
+from email.message import EmailMessage
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,12 +28,6 @@ TEXT_UPLOAD_EXTENSIONS = {".txt", ".md", ".csv", ".json"}
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(BASE_DIR / ".env", override=True)
 
-# DEBUG: Verify environment variables are loaded
-print("=" * 60)
-print("GROQ KEY LOADED:", os.getenv("GROQ_API_KEY"))
-print("VITE_GROQ_API_KEY:", os.getenv("VITE_GROQ_API_KEY"))
-print("=" * 60)
-
 GROQ_API_BASE_URL = os.getenv("GROQ_API_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "whisper-large-v3")
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "llama-3.1-8b-instant")
@@ -46,24 +44,176 @@ class EmailServiceError(RuntimeError):
     pass
 
 
-resend.api_key = os.environ.get("RESEND_API_KEY")
+def get_env_value(*names):
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return ""
 
 
-# -----------------------------
-# Email Sending Function (NEW)
-# -----------------------------
-def send_email(to_email, subject, content):
+def get_env_flag(*names, default=False):
+    for name in names:
+        value = os.getenv(name)
+        if value is None:
+            continue
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def get_int_env(*names, default=0):
+    value = get_env_value(*names)
+    if not value:
+        return default
     try:
-        resend.Emails.send({
-            "from": "onboarding@resend.dev",  # You can later replace with your domain
-            "to": [to_email],
-            "subject": subject,
-            "html": f"<pre>{content}</pre>"
-        })
-        return True
-    except Exception as e:
-        print("Email Error:", str(e))
-        return False
+        return int(value)
+    except ValueError as error:
+        raise EmailServiceError(f"{names[0]} must be a valid integer.") from error
+
+
+def get_smtp_settings():
+    host = get_env_value("MAIL_SERVER", "SMTP_HOST")
+    port = get_int_env("MAIL_PORT", "SMTP_PORT", default=0)
+    username = get_env_value("MAIL_USERNAME", "SMTP_EMAIL", "SMTP_USERNAME")
+    password = get_env_value("MAIL_PASSWORD", "SMTP_APP_PASSWORD", "SMTP_PASSWORD")
+    from_email = get_env_value("MAIL_FROM", "SMTP_FROM") or username
+    from_name = get_env_value("MAIL_FROM_NAME", "SMTP_FROM_NAME", "APP_NAME") or "MeetingMate AI"
+    use_ssl = get_env_flag("MAIL_USE_SSL", "SMTP_USE_SSL", default=port == 465)
+    use_tls = get_env_flag("MAIL_USE_TLS", "SMTP_USE_TLS", default=not use_ssl)
+    timeout_seconds = get_int_env("MAIL_TIMEOUT_SECONDS", "SMTP_TIMEOUT_SECONDS", default=30)
+    return {
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+        "from_email": from_email,
+        "from_name": from_name,
+        "use_ssl": use_ssl,
+        "use_tls": use_tls and not use_ssl,
+        "timeout_seconds": timeout_seconds,
+    }
+
+
+def is_smtp_configured(settings):
+    return bool(settings["host"] and settings["port"] and settings["from_email"])
+
+
+def has_partial_smtp_config(settings):
+    return any(
+        [
+            settings["host"],
+            settings["port"],
+            settings["username"],
+            settings["password"],
+            settings["from_email"],
+        ]
+    )
+
+
+def build_from_header(from_email, from_name):
+    return f'"{from_name}" <{from_email}>' if from_name else from_email
+
+
+def send_email_via_smtp(to_email, subject, content):
+    settings = get_smtp_settings()
+
+    if not is_smtp_configured(settings):
+        raise EmailServiceError(
+            "SMTP is not fully configured. Set MAIL_SERVER, MAIL_PORT, MAIL_FROM, "
+            "and optionally MAIL_USERNAME / MAIL_PASSWORD on the Render backend."
+        )
+
+    if bool(settings["username"]) != bool(settings["password"]):
+        raise EmailServiceError("SMTP auth is incomplete. Set both MAIL_USERNAME and MAIL_PASSWORD.")
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = build_from_header(settings["from_email"], settings["from_name"])
+    message["To"] = to_email
+    message.set_content(content)
+    message.add_alternative(f"<pre>{html.escape(content)}</pre>", subtype="html")
+
+    try:
+        if settings["use_ssl"]:
+            with smtplib.SMTP_SSL(
+                settings["host"],
+                settings["port"],
+                timeout=settings["timeout_seconds"],
+                context=ssl.create_default_context(),
+            ) as smtp:
+                if settings["username"] and settings["password"]:
+                    smtp.login(settings["username"], settings["password"])
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(
+                settings["host"],
+                settings["port"],
+                timeout=settings["timeout_seconds"],
+            ) as smtp:
+                smtp.ehlo()
+                if settings["use_tls"]:
+                    smtp.starttls(context=ssl.create_default_context())
+                    smtp.ehlo()
+                if settings["username"] and settings["password"]:
+                    smtp.login(settings["username"], settings["password"])
+                smtp.send_message(message)
+    except (smtplib.SMTPException, OSError) as error:
+        raise EmailServiceError(f"SMTP send failed: {error}") from error
+
+    return "smtp"
+
+
+def send_email_via_resend(to_email, subject, content):
+    resend_api_key = get_env_value("RESEND_API_KEY")
+    if not resend_api_key:
+        raise EmailServiceError("Resend is not configured. Set RESEND_API_KEY or configure SMTP MAIL_* values.")
+
+    resend.api_key = resend_api_key
+    from_email = get_env_value("RESEND_FROM_EMAIL", "MAIL_FROM") or "onboarding@resend.dev"
+    from_name = get_env_value("RESEND_FROM_NAME", "MAIL_FROM_NAME", "APP_NAME") or "MeetingMate AI"
+
+    try:
+        resend.Emails.send(
+            {
+                "from": build_from_header(from_email, from_name),
+                "to": [to_email],
+                "subject": subject,
+                "html": f"<pre>{html.escape(content)}</pre>",
+            }
+        )
+    except Exception as error:
+        raise EmailServiceError(f"Resend send failed: {error}") from error
+
+    return "resend"
+
+
+def send_email(to_email, subject, content):
+    smtp_settings = get_smtp_settings()
+    errors = []
+
+    if is_smtp_configured(smtp_settings):
+        try:
+            return send_email_via_smtp(to_email, subject, content)
+        except EmailServiceError as error:
+            errors.append(str(error))
+    elif has_partial_smtp_config(smtp_settings):
+        errors.append(
+            "SMTP config is incomplete. Set MAIL_SERVER, MAIL_PORT, MAIL_FROM, "
+            "and both MAIL_USERNAME and MAIL_PASSWORD if your provider requires login."
+        )
+
+    if get_env_value("RESEND_API_KEY"):
+        try:
+            return send_email_via_resend(to_email, subject, content)
+        except EmailServiceError as error:
+            errors.append(str(error))
+
+    if errors:
+        raise EmailServiceError(" ".join(errors))
+
+    raise EmailServiceError(
+        "Email delivery is not configured. Add MAIL_* / SMTP_* variables on Render or set RESEND_API_KEY."
+    )
 
 
 def resolve_upload_folder():
@@ -737,30 +887,43 @@ def create_app():
                 "response": "I'm having trouble connecting right now. Please try again in a moment."
             }), 502
 
-    @app.route("/send-email", methods=["POST"])
+    @app.route("/send-email", methods=["POST", "OPTIONS"])
+    @app.route("/api/send-email", methods=["POST", "OPTIONS"])
+    @app.route("/api/send-export-email", methods=["POST", "OPTIONS"])
     def send_email_route():
-        try:
-            data = request.get_json()
+        if request.method == "OPTIONS":
+            return jsonify({"ok": True}), 200
 
-            recipient_email = data.get("email")
-            summary = data.get("summary")
+        try:
+            data = request.get_json(silent=True) or {}
+
+            recipient_email = str(data.get("email") or "").strip()
+            summary = str(data.get("summary") or "").strip()
+            subject = str(data.get("subject") or data.get("title") or "Meeting Summary").strip() or "Meeting Summary"
 
             if not recipient_email or not summary:
                 return jsonify({"error": "Missing email or summary"}), 400
 
-            success = send_email(
+            provider = send_email(
                 recipient_email,
-                "Meeting Summary",
+                subject,
                 summary
             )
 
-            if success:
-                return jsonify({"success": True}), 200
-            else:
-                return jsonify({"error": "Failed to send email"}), 500
-
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Export email sent via {provider}.",
+                    "provider": provider,
+                    "toEmail": recipient_email,
+                }
+            ), 200
+        except EmailServiceError as error:
+            app.logger.warning("Email delivery failed for %s: %s", recipient_email, error)
+            return jsonify({"success": False, "error": str(error)}), 500
+        except Exception as error:
+            app.logger.exception("Unexpected email export failure: %s", error)
+            return jsonify({"success": False, "error": "Unexpected email export failure."}), 500
 
     @app.errorhandler(RequestEntityTooLarge)
     def handle_large_file(_error):

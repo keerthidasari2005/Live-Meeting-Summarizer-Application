@@ -17,9 +17,13 @@ function getExportEmailEndpoints() {
   const endpoints = new Set<string>();
 
   if (API_BASE_URL) {
+    endpoints.add(`${API_BASE_URL}/api/send-export-email`);
+    endpoints.add(`${API_BASE_URL}/api/send-email`);
     endpoints.add(`${API_BASE_URL}/send-email`);
   }
 
+  endpoints.add("/api/send-export-email");
+  endpoints.add("/api/send-email");
   endpoints.add("/send-email");
   return Array.from(endpoints);
 }
@@ -47,7 +51,9 @@ async function getBackendReachabilityError() {
     }
   }
 
-  return new Error("Could not reach the mail backend. Start the Flask API with `npm run dev` or `python backend/app.py`.");
+  return new Error(
+    "Could not reach the mail backend. Check VITE_API_BASE_URL in Vercel and confirm the Render backend is running."
+  );
 }
 
 export async function sendExportEmail({
@@ -61,6 +67,9 @@ export async function sendExportEmail({
   const requestBody = JSON.stringify({
     email: normalizedEmail,
     summary: reportText,
+    title,
+    format,
+    visualSection,
   });
 
   let lastNetworkError: unknown = null;
