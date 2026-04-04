@@ -50,13 +50,26 @@ class EmailServiceError(RuntimeError):
     pass
 
 
+def safe_bool(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def send_export_email(to_email, report_title, file_name, file_content_base64, mime_type):
     """Send export report via email using SMTP."""
-    smtp_server = os.getenv("SMTP_SERVER", "").strip()
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_username = os.getenv("SMTP_USERNAME", "").strip()
-    smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
-    from_email = os.getenv("FROM_EMAIL", smtp_username or "noreply@meetingmind.app").strip()
+    smtp_server = (os.getenv("SMTP_SERVER") or os.getenv("MAIL_SERVER") or "").strip()
+    smtp_port = int(os.getenv("SMTP_PORT") or os.getenv("MAIL_PORT") or "587")
+    smtp_username = (os.getenv("SMTP_USERNAME") or os.getenv("MAIL_USERNAME") or "").strip()
+    smtp_password = (os.getenv("SMTP_PASSWORD") or os.getenv("MAIL_PASSWORD") or "").strip()
+    from_email = (
+        os.getenv("FROM_EMAIL")
+        or os.getenv("MAIL_FROM")
+        or smtp_username
+        or "noreply@meetingmind.app"
+    ).strip()
+    use_tls = safe_bool(os.getenv("SMTP_USE_TLS") or os.getenv("MAIL_USE_TLS") or "true")
+    use_ssl = safe_bool(os.getenv("SMTP_USE_SSL") or os.getenv("MAIL_USE_SSL") or "false")
 
     if not smtp_server or not smtp_username or not smtp_password:
         raise EmailServiceError(
@@ -80,10 +93,18 @@ def send_export_email(to_email, report_title, file_name, file_content_base64, mi
         attachment.add_header("Content-Disposition", "attachment", filename=file_name)
         msg.attach(attachment)
 
-        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
-            server.starttls()
-            server.login(smtp_username, smtp_password)
-            server.send_message(msg)
+        if use_ssl or smtp_port == 465:
+            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30) as server:
+                server.login(smtp_username, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
+                server.ehlo()
+                if use_tls:
+                    server.starttls()
+                    server.ehlo()
+                server.login(smtp_username, smtp_password)
+                server.send_message(msg)
 
         return {"success": True, "message": f"Export sent to {to_email}"}
 
