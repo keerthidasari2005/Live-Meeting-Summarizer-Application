@@ -47,6 +47,24 @@ type UploadJobResponse = UploadApiResponse & {
   summary?: string;
 };
 
+async function parseUploadResponseData(response: Response): Promise<UploadJobResponse & { rawText?: string }> {
+  const rawText = await response.text();
+
+  if (!rawText) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(rawText) as UploadJobResponse;
+  } catch {
+    return {
+      rawText,
+      error: rawText,
+      message: rawText,
+    };
+  }
+}
+
 class UploadApiError extends Error {
   status: number;
   payload: UploadApiResponse;
@@ -158,6 +176,94 @@ export function FileUpload() {
     clearPolling();
     setUploadProgress(0);
     setJob(null);
+  };
+
+  const uploadInChunks = async (file: File): Promise<UploadJobResponse> => {
+    const CHUNK_SIZE = 1024 * 1024; // 1MB chunks to stay well under Vercel limits
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+
+    // Convert file to base64
+    const base64Data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove the data URL prefix (data:mime/type;base64,)
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    // Split base64 into chunks
+    const base64Chunks: string[] = [];
+    for (let i = 0; i < base64Data.length; i += CHUNK_SIZE) {
+      base64Chunks.push(base64Data.slice(i, i + CHUNK_SIZE));
+    }
+
+    // Initialize upload
+    const initResponse = await fetch(`${API_BASE_URL}/upload_init`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        filename: file.name,
+        total_chunks: base64Chunks.length,
+        file_size: file.size,
+        mime_type: file.type,
+      }),
+    });
+
+    if (!initResponse.ok) {
+      const responseData = await parseUploadResponseData(initResponse);
+      throw new Error(responseData.error || responseData.message || "Upload initialization failed.");
+    }
+
+    const initData = await initResponse.json();
+    const uploadId = initData.upload_id;
+
+    // Upload chunks
+    for (let i = 0; i < base64Chunks.length; i++) {
+      const response = await fetch(`${API_BASE_URL}/upload_chunk`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          upload_id: uploadId,
+          chunk_index: i,
+          chunk_data: base64Chunks[i],
+        }),
+      });
+
+      if (!response.ok) {
+        const responseData = await parseUploadResponseData(response);
+        throw new Error(responseData.error || responseData.message || `Chunk ${i} upload failed.`);
+      }
+
+      setUploadProgress(Math.round(((i + 1) / base64Chunks.length) * 100 * 0.6));
+    }
+
+    setUploadProgress(60);
+
+    // Process the uploaded file
+    const processResponse = await fetch(`${API_BASE_URL}/process_upload`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ upload_id: uploadId }),
+    });
+
+    const data = await parseUploadResponseData(processResponse);
+
+    if (!processResponse.ok) {
+      throw new Error(data.error || data.message || "File processing failed.");
+    }
+
+    setUploadProgress(100);
+    return data;
   };
 
   const handleDownload = async (format: "pdf" | "docx") => {
@@ -304,25 +410,13 @@ export function FileUpload() {
     resetJobState();
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/upload`, {
-        method: "POST",
-        body: formData,
-      });
-      const data = await response.json();
-
+      const data = await uploadInChunks(file);
       console.log(data);
-
-      if (!response.ok) {
-        throw new Error(data.error || data.message || "Upload failed.");
-      }
 
       const transcriptText = typeof data.transcript === "string" ? data.transcript.trim() : "";
       const summaryText = typeof data.summary === "string" ? data.summary.trim() : "";
 
       setSummary(summaryText || null);
-      setExportSummary(null);
       setUploadProgress(100);
       setJob({
         ...data,
@@ -364,6 +458,34 @@ export function FileUpload() {
           status: "completed",
           source: "upload",
         });
+      } else {
+        // If no transcript but we have a summary, create a basic export summary
+        if (summaryText) {
+          const basicSummary = {
+            id: crypto.randomUUID(),
+            executiveSummary: summaryText,
+            keyPoints: [],
+            actionItems: [],
+            decisions: [],
+            nextSteps: [],
+            printableReport: summaryText,
+            meetingDate: new Date().toISOString(),
+            duration: "Not specified",
+            participants: [],
+          };
+          setExportSummary(basicSummary);
+
+          addUploadedMeeting({
+            id: crypto.randomUUID(),
+            title: file.name || data.original_filename || "Uploaded media",
+            date: new Date().toISOString(),
+            duration: "Not specified",
+            transcript: [],
+            summary: basicSummary,
+            status: "completed",
+            source: "upload",
+          });
+        }
       }
 
       toast({

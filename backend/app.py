@@ -21,6 +21,12 @@ TEXT_UPLOAD_EXTENSIONS = {".txt", ".md", ".csv", ".json"}
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(BASE_DIR / ".env", override=True)
 
+# DEBUG: Verify environment variables are loaded
+print("=" * 60)
+print("GROQ KEY LOADED:", os.getenv("GROQ_API_KEY"))
+print("VITE_GROQ_API_KEY:", os.getenv("VITE_GROQ_API_KEY"))
+print("=" * 60)
+
 GROQ_API_BASE_URL = os.getenv("GROQ_API_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "whisper-large-v3")
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "llama-3.1-8b-instant")
@@ -254,7 +260,8 @@ def create_app():
 
     app.config["JSON_SORT_KEYS"] = False
     app.config["UPLOAD_FOLDER"] = str(upload_folder)
-    app.config["MAX_CONTENT_LENGTH"] = max_upload_mb * BYTE_MULTIPLIER
+    app.config["MAX_CONTENT_LENGTH"] = 50 * BYTE_MULTIPLIER  # 50MB limit for individual requests
+    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
     logging.basicConfig(
         level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -321,6 +328,155 @@ def create_app():
             }
         ), 200
 
+    @app.route("/upload_init", methods=["POST"])
+    @app.route("/api/upload_init", methods=["POST"])
+    def upload_init():
+        data = request.get_json(silent=True) or {}
+        filename = str(data.get("filename") or "").strip()
+        total_chunks = int(data.get("total_chunks") or 0)
+        file_size = int(data.get("file_size") or 0)
+        mime_type = str(data.get("mime_type") or "").strip()
+
+        if not filename or total_chunks <= 0 or file_size <= 0:
+            return jsonify({"success": False, "error": "Invalid upload initialization data."}), 400
+
+        upload_id = str(uuid4())
+        upload_dir = Path(app.config["UPLOAD_FOLDER"]) / upload_id
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        # Store metadata
+        metadata = {
+            "filename": filename,
+            "total_chunks": total_chunks,
+            "file_size": file_size,
+            "mime_type": mime_type,
+            "uploaded_chunks": 0,
+            "chunks": {}
+        }
+
+        with (upload_dir / "metadata.json").open("w") as f:
+            import json
+            json.dump(metadata, f)
+
+        return jsonify({
+            "success": True,
+            "upload_id": upload_id,
+            "message": "Upload initialized successfully."
+        }), 200
+
+    @app.route("/upload_chunk", methods=["POST"])
+    @app.route("/api/upload_chunk", methods=["POST"])
+    def upload_chunk():
+        data = request.get_json(silent=True) or {}
+        upload_id = str(data.get("upload_id") or "").strip()
+        chunk_index = int(data.get("chunk_index") or -1)
+        chunk_data = str(data.get("chunk_data") or "").strip()
+
+        if not upload_id or chunk_index < 0 or not chunk_data:
+            return jsonify({"success": False, "error": "Invalid chunk data."}), 400
+
+        upload_dir = Path(app.config["UPLOAD_FOLDER"]) / upload_id
+        if not upload_dir.exists():
+            return jsonify({"success": False, "error": "Upload session not found."}), 404
+
+        metadata_path = upload_dir / "metadata.json"
+        if not metadata_path.exists():
+            return jsonify({"success": False, "error": "Upload metadata not found."}), 404
+
+        import json
+        with metadata_path.open("r") as f:
+            metadata = json.load(f)
+
+        # Save chunk
+        chunk_path = upload_dir / f"chunk_{chunk_index}.b64"
+        with chunk_path.open("w") as f:
+            f.write(chunk_data)
+
+        # Update metadata
+        metadata["chunks"][str(chunk_index)] = True
+        metadata["uploaded_chunks"] = len(metadata["chunks"])
+
+        with metadata_path.open("w") as f:
+            json.dump(metadata, f)
+
+        return jsonify({
+            "success": True,
+            "chunk_index": chunk_index,
+            "uploaded_chunks": metadata["uploaded_chunks"],
+            "total_chunks": metadata["total_chunks"]
+        }), 200
+
+    @app.route("/process_upload", methods=["POST"])
+    @app.route("/api/process_upload", methods=["POST"])
+    def process_upload():
+        data = request.get_json(silent=True) or {}
+        upload_id = str(data.get("upload_id") or "").strip()
+
+        if not upload_id:
+            return jsonify({"success": False, "error": "Missing upload_id."}), 400
+
+        upload_dir = Path(app.config["UPLOAD_FOLDER"]) / upload_id
+        if not upload_dir.exists():
+            return jsonify({"success": False, "error": "Upload session not found."}), 404
+
+        metadata_path = upload_dir / "metadata.json"
+        if not metadata_path.exists():
+            return jsonify({"success": False, "error": "Upload metadata not found."}), 404
+
+        import json
+        with metadata_path.open("r") as f:
+            metadata = json.load(f)
+
+        # Check if all chunks are uploaded
+        if metadata["uploaded_chunks"] != metadata["total_chunks"]:
+            return jsonify({
+                "success": False,
+                "error": f"Upload incomplete. {metadata['uploaded_chunks']}/{metadata['total_chunks']} chunks uploaded."
+            }), 400
+
+        # Reconstruct file from base64 chunks
+        final_filename = f"{uuid4().hex}_{sanitize_filename(metadata['filename'])}"
+        final_path = Path(app.config["UPLOAD_FOLDER"]) / final_filename
+
+        try:
+            with final_path.open("wb") as final_file:
+                for i in range(metadata["total_chunks"]):
+                    chunk_path = upload_dir / f"chunk_{i}.b64"
+                    if not chunk_path.exists():
+                        raise ValueError(f"Chunk {i} missing")
+
+                    with chunk_path.open("r") as chunk_file:
+                        chunk_data = chunk_file.read().strip()
+
+                    # Decode base64 chunk
+                    import base64
+                    chunk_bytes = base64.b64decode(chunk_data)
+                    final_file.write(chunk_bytes)
+
+            # Clean up upload directory
+            import shutil
+            shutil.rmtree(upload_dir)
+
+            # Process the file
+            transcript_text, summary_text = generate_summary_from_upload(final_path, metadata["filename"])
+
+            return jsonify({
+                "success": True,
+                "message": "File uploaded and processed successfully.",
+                "filename": final_filename,
+                "original_filename": metadata["filename"],
+                "size_bytes": final_path.stat().st_size,
+                "transcript": transcript_text,
+                "summary": summary_text,
+            }), 200
+
+        except Exception as e:
+            app.logger.error("File reconstruction failed: %s", e)
+            # Clean up on failure
+            if final_path.exists():
+                final_path.unlink()
+            return jsonify({"success": False, "error": f"File processing failed: {str(e)}"}), 500
+
     @app.route("/chat", methods=["POST", "OPTIONS"])
     @app.route("/api/chat", methods=["POST", "OPTIONS"])
     def chat():
@@ -331,23 +487,101 @@ def create_app():
         if not isinstance(payload, dict):
             payload = {}
 
-        user_message = payload.get("message")
-        if user_message is None:
-            user_message = request.form.get("message", "")
+        user_message = str(payload.get("message") or "").strip()
+        context = str(payload.get("context") or "").strip()
+        history = payload.get("history") or []
 
-        user_message = str(user_message or "").strip()
-        reply_text = "This is a test AI response from the Flask backend."
-        if user_message:
-            reply_text = f"Test AI response: I received your message: {user_message}"
+        if not user_message:
+            return jsonify({"success": False, "error": "No message provided."}), 400
 
-        return jsonify(
-            {
+        # Build conversation context
+        messages = []
+
+        # Add system message with context
+        if context:
+            messages.append({
+                "role": "system",
+                "content": context
+            })
+
+        # Add conversation history
+        for msg in history[-6:]:  # Keep last 6 messages for context
+            if isinstance(msg, dict) and "role" in msg and "content" in msg:
+                messages.append({
+                    "role": msg["role"],
+                    "content": str(msg["content"])
+                })
+
+        # Add current user message
+        messages.append({
+            "role": "user",
+            "content": user_message
+        })
+
+        # Use Groq for chat
+        api_key = (os.getenv("GROQ_API_KEY") or "").strip()
+        if not api_key:
+            return jsonify({
+                "success": False,
+                "error": "Chat service not configured.",
+                "response": "I'm sorry, the chat service is currently unavailable."
+            }), 503
+
+        try:
+            response = requests.post(
+                f"{GROQ_API_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "llama-3.1-8b-instant",
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 1000,
+                },
+                timeout=(30, 60),
+            )
+
+            if not response.ok:
+                app.logger.warning("Chat API error: %s", response.text)
+                return jsonify({
+                    "success": False,
+                    "error": "Chat service temporarily unavailable.",
+                    "response": "I'm having trouble connecting right now. Please try again in a moment."
+                }), 502
+
+            payload = response.json()
+            choices = payload.get("choices") or []
+            if not choices:
+                return jsonify({
+                    "success": False,
+                    "error": "No response generated.",
+                    "response": "I couldn't generate a response. Please try again."
+                }), 502
+
+            ai_response = choices[0].get("message", {}).get("content", "").strip()
+            if not ai_response:
+                return jsonify({
+                    "success": False,
+                    "error": "Empty response generated.",
+                    "response": "I couldn't generate a response. Please try again."
+                }), 502
+
+            return jsonify({
                 "success": True,
-                "response": reply_text,
+                "response": ai_response,
                 "message": user_message,
-                "model": "dummy-ai",
-            }
-        ), 200
+                "model": "llama-3.1-8b-instant",
+            }), 200
+
+        except requests.RequestException as e:
+            app.logger.error("Chat request failed: %s", e)
+            return jsonify({
+                "success": False,
+                "error": "Chat service error.",
+                "response": "I'm having trouble connecting right now. Please try again in a moment."
+            }), 502
 
     @app.errorhandler(RequestEntityTooLarge)
     def handle_large_file(_error):
