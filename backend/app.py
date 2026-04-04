@@ -508,7 +508,9 @@ def create_app():
                 f.write(chunk_bytes)
 
         metadata["chunks"][str(chunk_index)] = True
-        metadata["uploaded_chunks"] = len(metadata["chunks"])
+        metadata["uploaded_chunks"] = len({
+            p.name for p in upload_dir.glob("chunk_*.bin")
+        })
 
         with metadata_path.open("w") as f:
             json.dump(metadata, f)
@@ -541,11 +543,18 @@ def create_app():
         with metadata_path.open("r") as f:
             metadata = json.load(f)
 
-        # Check if all chunks are uploaded
-        if metadata["uploaded_chunks"] != metadata["total_chunks"]:
+        # Check actual chunk files rather than relying on metadata counts.
+        actual_chunk_indices = {
+            int(path.stem.split("_")[1])
+            for path in upload_dir.glob("chunk_*.bin")
+            if path.stem.startswith("chunk_")
+        }
+        actual_uploaded_chunks = len(actual_chunk_indices)
+
+        if actual_uploaded_chunks != metadata["total_chunks"]:
             return jsonify({
                 "success": False,
-                "error": f"Upload incomplete. {metadata['uploaded_chunks']}/{metadata['total_chunks']} chunks uploaded."
+                "error": f"Upload incomplete. {actual_uploaded_chunks}/{metadata['total_chunks']} chunks uploaded."
             }), 400
 
         # Reconstruct file from uploaded chunks
