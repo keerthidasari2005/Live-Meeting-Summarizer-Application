@@ -6,6 +6,7 @@ import { useMeetingStore } from "@/hooks/useMeetingStore";
 import { useSearchParams } from "react-router-dom";
 
 type Message = { role: "user" | "assistant"; content: string };
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 export function ChatBot() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -87,34 +88,26 @@ FORMATTING RULES:
 MEETING CONTEXT:
 ${recentMeetingsContext || "No recorded meetings yet."}`;
 
-      const apiKey = import.meta.env.VITE_GROQ_API_KEY ;
-      if (!apiKey) {
-        throw new Error("API key not found");
-      }
-
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-         method: "POST",
-         headers: {
-           "Authorization": `Bearer ${apiKey}`,
-           "Content-Type": "application/json"
-         },
-         body: JSON.stringify({
-           model: "llama-3.1-8b-instant",
-           messages: [
-             { role: "system", content: promptContext },
-             ...messages.slice(-4).map(m => ({ role: m.role, content: m.content })),
-             { role: "user", content: userMessage }
-           ]
-         })
+      const chatEndpoint = API_BASE_URL ? `${API_BASE_URL}/chat` : "/chat";
+      const res = await fetch(chatEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          message: userMessage,
+          context: promptContext,
+          history: messages.slice(-4).map((m) => ({ role: m.role, content: m.content })),
+        })
       });
-      
+
       const data = await res.json();
-      
+
       if (!res.ok) {
-         throw new Error(data.error?.message || "Failed to fetch from Groq");
+         throw new Error(data.error || data.message || "Failed to fetch from the chat API");
       }
 
-      const responseText = data.choices[0].message.content;
+      const responseText = data.response || "<p>I received your message.</p>";
       setMessages(prev => [...prev, { role: "assistant", content: responseText }]);
       
     } catch (err) {

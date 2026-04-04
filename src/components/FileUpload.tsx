@@ -23,13 +23,16 @@ type UploadApiResponse = {
   message?: string;
   max_upload_mb?: number;
   next_step?: string;
+  filename?: string;
+  original_filename?: string;
+  size_bytes?: number;
 };
 
 type UploadJobResponse = UploadApiResponse & {
-  job_id: string;
-  status: JobStatus;
-  stage: string;
-  progress: number;
+  job_id?: string;
+  status?: JobStatus;
+  stage?: string;
+  progress?: number;
   status_url?: string;
   process_url?: string;
   warnings?: string[];
@@ -58,6 +61,9 @@ class UploadApiError extends Error {
 
 const isTerminalStatus = (status?: JobStatus) =>
   status === "completed" || status === "completed_with_warnings" || status === "failed";
+
+const isDirectUploadResponse = (payload: UploadJobResponse) =>
+  !payload.job_id && Boolean(payload.filename);
 
 async function parseResponseJson<T>(response: Response): Promise<T> {
   return response.json().catch(() => ({} as T));
@@ -290,14 +296,7 @@ export function FileUpload() {
   };
 
   const handleUpload = async () => {
-    if (!file) {
-      toast({
-        title: "No file selected",
-        description: "Please select an audio or video file first.",
-        variant: "destructive",
-      });
-      return;
-    }
+    if (!file) return;
 
     setIsUploading(true);
     setSummary(null);
@@ -307,82 +306,47 @@ export function FileUpload() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      if (session?.email) {
-        formData.append("notify_email", session.email);
-      }
-
-      const uploadPayload = await uploadWithProgress(
-        `${API_BASE_URL}/api/upload`,
-        formData,
-        setUploadProgress,
-      );
-
-      setIsUploading(false);
-      setJob(uploadPayload);
-      setUploadProgress(100);
-
-      const processPath = uploadPayload.process_url || "/api/process";
-      const processResponse = await fetch(`${API_BASE_URL}${processPath}`, {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/upload`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+        body: formData,
+      });
+      const data = await response.json();
+
+      console.log(data);
+
+      if (!response.ok) {
+        throw new Error(data.error || data.message || "Upload failed.");
+      }
+
+      setUploadProgress(100);
+      setJob({
+        ...data,
+        job_id: data.filename || crypto.randomUUID(),
+        status: "completed",
+        stage: "uploaded",
+        progress: 100,
+        upload: {
+          filename: data.filename,
+          size_mb: typeof data.size_bytes === "number" ? data.size_bytes / (1024 * 1024) : undefined,
         },
-        body: JSON.stringify({
-          job_id: uploadPayload.job_id,
-          notify_email: session?.email || undefined,
-        }),
       });
-      const payload = await parseResponseJson<UploadJobResponse>(processResponse);
-
-      if (!processResponse.ok) {
-        throw new UploadApiError(
-          processResponse.status,
-          payload.message || "Failed to start background processing.",
-          payload,
-        );
-      }
-
-      setJob(payload);
-
-      if (isTerminalStatus(payload.status)) {
-        if (payload.status === "failed") {
-          throw new UploadApiError(500, payload.message || "Background processing failed.", payload);
-        }
-        finalizeCompletedJob(payload);
-        return;
-      }
 
       toast({
-        title: "Processing started",
-        description: payload.message || "Your media was uploaded and queued for background processing.",
+        title: "Upload complete",
+        description: data.message || "File uploaded successfully.",
       });
-
-      await pollJobStatus(payload.job_id);
     } catch (error: unknown) {
-      console.error("Upload API Error:", error);
-      const apiError = error instanceof UploadApiError ? error : null;
-      const payload = apiError?.payload || {};
-      const baseErrorMessage = error instanceof Error ? error.message : "";
-      const errorMessage = baseErrorMessage.toLowerCase();
-      let description = payload.message || baseErrorMessage || "Failed to analyze the media using the AI.";
-
-      if (errorMessage.includes("timed out")) {
-        description = "The upload took too long to reach the backend. Keep nginx and Flask timeouts aligned for large media.";
-      } else if (error instanceof TypeError && errorMessage.includes("failed to fetch")) {
-        const apiTarget = API_BASE_URL || "the Vite /api proxy";
-        description = `Could not reach the upload API via ${apiTarget}. Start the Flask backend with 'npm run dev:backend' or 'npm run dev:all'.`;
-      } else if (apiError?.status === 413) {
-        description = payload.message
-          || `The file exceeds the ${payload.max_upload_mb || MAX_UPLOAD_MB} MB upload limit. ${payload.next_step || ""}`.trim();
-      }
-
-      setJob((current) =>
-        current
-          ? { ...current, status: "failed", message: description }
-          : null,
-      );
+      console.error("Upload failed:", error);
+      const description = error instanceof Error ? error.message : "Upload failed.";
+      setJob({
+        job_id: crypto.randomUUID(),
+        status: "failed",
+        stage: "upload",
+        progress: 0,
+        message: description,
+      });
       toast({
-        title: "Error processing file",
+        title: "Upload failed",
         description,
         variant: "destructive",
       });
@@ -400,6 +364,15 @@ export function FileUpload() {
 
   const isBusy = isUploading || (job !== null && !isTerminalStatus(job.status));
   const currentProgress = isUploading ? uploadProgress : job?.progress || 0;
+  const progressTitle = isUploading
+    ? "Uploading Media"
+    : job?.status === "completed" && !summary
+      ? "Upload Complete"
+      : "Background Processing";
+  const progressDescription = job?.message
+    || (job?.status === "completed" && !summary
+      ? "Your file was uploaded successfully."
+      : "Your file is being uploaded and queued for background processing.");
 
   return (
     <div className="space-y-6">
@@ -464,9 +437,9 @@ export function FileUpload() {
       {(isBusy || job) && (
         <Card className="border-border/80">
           <CardHeader>
-            <CardTitle>{isUploading ? "Uploading Media" : "Background Processing"}</CardTitle>
+            <CardTitle>{progressTitle}</CardTitle>
             <CardDescription>
-              {job?.message || "Your file is being uploaded and queued for background processing."}
+              {progressDescription}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

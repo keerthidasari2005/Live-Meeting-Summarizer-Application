@@ -76,6 +76,7 @@ def create_app():
 
     @app.route("/", methods=["GET"])
     @app.route("/health", methods=["GET"])
+    @app.route("/api/health", methods=["GET"])
     def health_check():
         return jsonify({"status": "Backend running"}), 200
 
