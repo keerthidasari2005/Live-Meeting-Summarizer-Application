@@ -388,6 +388,13 @@ def create_app():
             chunk_data = str(data.get("chunk_data") or "").strip()
 
         if not upload_id or chunk_index < 0 or (chunk_file is None and not chunk_data):
+            app.logger.warning(
+                "Invalid chunk data. content_type=%s form_keys=%s json_keys=%s has_file=%s",
+                request.content_type,
+                list(request.form.keys()),
+                list((request.get_json(silent=True) or {}).keys()),
+                chunk_file is not None,
+            )
             return jsonify({"success": False, "error": "Invalid chunk data."}), 400
 
         upload_dir = Path(app.config["UPLOAD_FOLDER"]) / upload_id
