@@ -179,7 +179,7 @@ export function FileUpload() {
   };
 
   const uploadInChunks = async (file: File): Promise<UploadJobResponse> => {
-    const CHUNK_SIZE = 1024 * 1024; // 1MB chunks to stay well under Vercel limits
+    const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks to reduce request count while staying under Vercel limits
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
     const initResponse = await fetch(`${API_BASE_URL}/upload_init`, {

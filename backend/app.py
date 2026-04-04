@@ -32,7 +32,7 @@ print("=" * 60)
 GROQ_API_BASE_URL = os.getenv("GROQ_API_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "whisper-large-v3")
 SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "llama-3.1-8b-instant")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "text-bison-001")
 AI_REQUEST_TIMEOUT_SECONDS = int(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "300"))
 SUMMARY_MAX_CHARS = int(os.getenv("SUMMARY_MAX_CHARS", "30000"))
 
@@ -284,21 +284,14 @@ def summarize_with_gemini(transcript_text, filename):
         raise AIServiceError("GEMINI_API_KEY is not configured for summary generation.")
 
     response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={api_key}",
+        f"https://generativelanguage.googleapis.com/v1beta2/models/{GEMINI_MODEL}:generateText?key={api_key}",
         headers={"Content-Type": "application/json"},
         json={
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": build_summary_prompt(filename, transcript_text),
-                        }
-                    ]
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.2,
+            "prompt": {
+                "text": build_summary_prompt(filename, transcript_text),
             },
+            "temperature": 0.2,
+            "maxOutputTokens": 1000,
         },
         timeout=(30, AI_REQUEST_TIMEOUT_SECONDS),
     )
@@ -311,14 +304,7 @@ def summarize_with_gemini(transcript_text, filename):
     if not candidates:
         raise AIServiceError("Gemini summary response did not contain any candidates.")
 
-    content = candidates[0].get("content") or {}
-    parts = content.get("parts") or []
-    summary_text = "\n".join(
-        part.get("text", "").strip()
-        for part in parts
-        if isinstance(part, dict) and part.get("text")
-    ).strip()
-
+    summary_text = (candidates[0].get("content") or {}).get("text", "").strip()
     if not summary_text:
         raise AIServiceError("Gemini summary response was empty.")
 
@@ -334,12 +320,16 @@ def generate_summary_from_upload(file_path, original_filename):
     if not transcript_text:
         raise AIServiceError("The uploaded file did not produce any transcript text.")
 
-    if (os.getenv("GEMINI_API_KEY") or "").strip():
-        summary_text = summarize_with_gemini(transcript_text, original_filename)
-    else:
-        summary_text = summarize_with_groq(transcript_text, original_filename)
+    gemini_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if gemini_key:
+        try:
+            return transcript_text, summarize_with_gemini(transcript_text, original_filename)
+        except AIServiceError as gemini_error:
+            logging.getLogger(__name__).warning(
+                "Gemini summary failed, falling back to Groq: %s", gemini_error
+            )
 
-    return transcript_text, summary_text
+    return transcript_text, summarize_with_groq(transcript_text, original_filename)
 
 
 def create_app():
