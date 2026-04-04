@@ -19,21 +19,6 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(BASE_DIR / ".env", override=True)
 
 
-def parse_cors_origins():
-    raw_value = (
-        os.getenv("CORS_ORIGINS")
-        or os.getenv("FRONTEND_URL")
-        or os.getenv("VERCEL_FRONTEND_URL")
-        or "*"
-    ).strip()
-
-    if raw_value == "*":
-        return "*"
-
-    origins = [origin.strip() for origin in raw_value.split(",") if origin.strip()]
-    return origins or "*"
-
-
 def resolve_upload_folder():
     configured_path = os.getenv("UPLOAD_FOLDER", "uploads").strip() or "uploads"
     upload_path = Path(configured_path)
@@ -50,7 +35,6 @@ def create_app():
 
     max_upload_mb = int(os.getenv("MAX_UPLOAD_MB", os.getenv("MAX_CONTENT_LENGTH_MB", "250")))
     upload_folder = resolve_upload_folder()
-    cors_origins = parse_cors_origins()
 
     app.config["JSON_SORT_KEYS"] = False
     app.config["UPLOAD_FOLDER"] = str(upload_folder)
@@ -62,17 +46,14 @@ def create_app():
     )
     app.logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 
-    cors_options = {
-        "resources": {r"/*": {"origins": cors_origins}},
-        "allow_headers": ["Content-Type", "Authorization"],
-        "methods": ["GET", "POST", "OPTIONS"],
-    }
-    if cors_origins != "*":
-        cors_options["supports_credentials"] = True
-    else:
-        cors_options["send_wildcard"] = True
+    CORS(app, supports_credentials=True)
 
-    CORS(app, **cors_options)
+    @app.after_request
+    def after_request(response):
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add("Access-Control-Allow-Headers", "*")
+        response.headers.add("Access-Control-Allow-Methods", "*")
+        return response
 
     @app.route("/", methods=["GET"])
     @app.route("/health", methods=["GET"])
@@ -80,9 +61,12 @@ def create_app():
     def health_check():
         return jsonify({"status": "Backend running"}), 200
 
-    @app.route("/upload", methods=["POST"])
-    @app.route("/api/upload", methods=["POST"])
+    @app.route("/upload", methods=["POST", "OPTIONS"])
+    @app.route("/api/upload", methods=["POST", "OPTIONS"])
     def upload_file():
+        if request.method == "OPTIONS":
+            return jsonify({"ok": True}), 200
+
         if not request.files:
             return jsonify(
                 {
