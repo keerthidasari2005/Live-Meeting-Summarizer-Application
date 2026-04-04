@@ -179,7 +179,8 @@ export function FileUpload() {
   };
 
   const uploadInChunks = async (file: File): Promise<UploadJobResponse> => {
-    const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB chunks to reduce request count while staying under Vercel limits
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB raw chunks to optimize speed, still safe for Render
+    const MAX_PARALLEL = 3;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
     const initResponse = await fetch(`${API_BASE_URL}/upload_init`, {
@@ -207,83 +208,53 @@ export function FileUpload() {
       throw new Error("Upload session could not be created.");
     }
 
-    const uploadWithFormData = async () => {
-      for (let i = 0; i < totalChunks; i += 1) {
-        const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        const formData = new FormData();
-        formData.append("chunk", chunk, file.name);
-        formData.append("upload_id", uploadId);
-        formData.append("chunk_index", String(i));
-        formData.append("total_chunks", String(totalChunks));
-        formData.append("filename", file.name);
-
-        const response = await fetch(`${API_BASE_URL}/upload_chunk`, {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const responseData = await parseUploadResponseData(response);
-          throw new Error(responseData.error || responseData.message || `Chunk ${i} upload failed.`);
-        }
-
-        setUploadProgress(Math.round(((i + 1) / totalChunks) * 100 * 0.6));
+    const encodeChunkToBase64 = async (chunk: Blob) => {
+      const buffer = await chunk.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      const BATCH_SIZE = 0x8000;
+      for (let i = 0; i < bytes.length; i += BATCH_SIZE) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + BATCH_SIZE));
       }
+      return btoa(binary);
     };
 
-    const uploadWithBase64 = async () => {
-      const base64Data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          const base64 = result.split(",")[1];
-          resolve(base64);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+    const uploadChunk = async (index: number) => {
+      const chunk = file.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE);
+      const chunk_data = await encodeChunkToBase64(chunk);
+      const response = await fetch(`${API_BASE_URL}/upload_chunk`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          upload_id: uploadId,
+          chunk_index: index,
+          chunk_data,
+        }),
       });
 
-      const base64Chunks: string[] = [];
-      for (let i = 0; i < base64Data.length; i += CHUNK_SIZE) {
-        base64Chunks.push(base64Data.slice(i, i + CHUNK_SIZE));
-      }
-
-      for (let i = 0; i < base64Chunks.length; i += 1) {
-        const response = await fetch(`${API_BASE_URL}/upload_chunk`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            upload_id: uploadId,
-            chunk_index: i,
-            chunk_data: base64Chunks[i],
-          }),
-        });
-
-        if (!response.ok) {
-          const responseData = await parseUploadResponseData(response);
-          throw new Error(responseData.error || responseData.message || `Chunk ${i} upload failed.`);
-        }
-
-        setUploadProgress(Math.round(((i + 1) / base64Chunks.length) * 100 * 0.6));
+      if (!response.ok) {
+        const responseData = await parseUploadResponseData(response);
+        throw new Error(responseData.error || responseData.message || `Chunk ${index} upload failed.`);
       }
     };
 
-    try {
-      await uploadWithFormData();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("Invalid chunk data")) {
-        console.warn("Multipart upload failed in production, retrying with base64 JSON chunks.");
-        await uploadWithBase64();
-      } else {
-        throw error;
-      }
+    let completedChunks = 0;
+    for (let start = 0; start < totalChunks; start += MAX_PARALLEL) {
+      const batchIndexes = Array.from(
+        { length: Math.min(MAX_PARALLEL, totalChunks - start) },
+        (_, idx) => start + idx,
+      );
+
+      await Promise.all(batchIndexes.map(async (chunkIndex) => {
+        await uploadChunk(chunkIndex);
+        completedChunks += 1;
+        setUploadProgress(Math.round((completedChunks / totalChunks) * 60));
+      }));
     }
 
-    setUploadProgress(60);
-
+    setUploadProgress(65);
     const processResponse = await fetch(`${API_BASE_URL}/process_upload`, {
       method: "POST",
       headers: {
@@ -293,7 +264,6 @@ export function FileUpload() {
     });
 
     const data = await parseUploadResponseData(processResponse);
-
     if (!processResponse.ok) {
       throw new Error(data.error || data.message || "File processing failed.");
     }

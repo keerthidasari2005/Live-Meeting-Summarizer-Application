@@ -140,16 +140,20 @@ def build_summary_prompt(filename, transcript_text):
     return f"""
 You are an expert meeting assistant.
 
-Create a concise, professional summary for the uploaded recording: {filename}
+Create a clean, professional meeting summary for the uploaded recording: {filename}
 
-Return plain text using these sections:
-Executive Summary
-Key Points
-Action Items
-Decisions
-Next Steps
+Return plain text only, using these exact headings in this order:
+Executive Summary:
+Key Points:
+Action Items:
+Decisions:
+Next Steps:
 
-Do not invent facts. If details are missing, say so briefly.
+- Use short paragraphs for the Executive Summary.
+- Use bullet items for Key Points, Action Items, Decisions, and Next Steps.
+- If a section has no content, write "None identified." under that heading.
+- Do not include JSON, XML, or markdown fences.
+- Do not invent any details.
 
 Transcript:
 {prepared_transcript}
