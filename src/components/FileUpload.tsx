@@ -318,6 +318,11 @@ export function FileUpload() {
         throw new Error(data.error || data.message || "Upload failed.");
       }
 
+      const transcriptText = typeof data.transcript === "string" ? data.transcript.trim() : "";
+      const summaryText = typeof data.summary === "string" ? data.summary.trim() : "";
+
+      setSummary(summaryText || null);
+      setExportSummary(null);
       setUploadProgress(100);
       setJob({
         ...data,
@@ -331,9 +336,39 @@ export function FileUpload() {
         },
       });
 
+      if (transcriptText) {
+        const transcriptEntries = [
+          {
+            id: crypto.randomUUID(),
+            timestamp: "0:00",
+            speaker: "Media Upload",
+            text: transcriptText,
+            speakerColor: "hsl(280 60% 55%)",
+          },
+        ];
+
+        const structuredSummary = generateSummary(
+          transcriptEntries,
+          file.type.startsWith("video") ? "Uploaded Video" : "Uploaded Audio",
+        );
+        structuredSummary.printableReport = summaryText || structuredSummary.printableReport;
+        setExportSummary(structuredSummary);
+
+        addUploadedMeeting({
+          id: crypto.randomUUID(),
+          title: file.name || data.original_filename || "Uploaded media",
+          date: new Date().toISOString(),
+          duration: "Not specified",
+          transcript: transcriptEntries,
+          summary: structuredSummary,
+          status: "completed",
+          source: "upload",
+        });
+      }
+
       toast({
-        title: "Upload complete",
-        description: data.message || "File uploaded successfully.",
+        title: "Summary ready",
+        description: data.message || "File uploaded and summarized successfully.",
       });
     } catch (error: unknown) {
       console.error("Upload failed:", error);
