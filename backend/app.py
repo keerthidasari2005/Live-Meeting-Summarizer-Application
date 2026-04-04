@@ -1,6 +1,8 @@
 import logging
 import mimetypes
 import os
+import tempfile
+import wave
 from pathlib import Path
 from uuid import uuid4
 
@@ -82,6 +84,51 @@ def read_text_upload(file_path):
         return file_path.read_text(encoding="utf-8", errors="ignore")
 
 
+def split_wav_file_to_chunks(file_path, max_chunk_bytes=16 * BYTE_MULTIPLIER):
+    chunk_files = []
+    chunk_dir = None
+    try:
+        with wave.open(str(file_path), "rb") as source_wave:
+            n_channels = source_wave.getnchannels()
+            sampwidth = source_wave.getsampwidth()
+            framerate = source_wave.getframerate()
+            total_frames = source_wave.getnframes()
+            bytes_per_frame = n_channels * sampwidth
+
+            if bytes_per_frame == 0:
+                return []
+
+            if chunk_dir is None:
+                chunk_dir = Path(tempfile.mkdtemp(dir=file_path.parent))
+
+            max_frames = max_chunk_bytes // bytes_per_frame
+            if max_frames < 1:
+                max_frames = 1
+
+            remaining_frames = total_frames
+            chunk_index = 0
+
+            while remaining_frames > 0:
+                frames_to_write = min(remaining_frames, max_frames)
+                frames = source_wave.readframes(frames_to_write)
+
+                chunk_file = chunk_dir / f"{file_path.stem}_chunk_{chunk_index}.wav"
+                with wave.open(str(chunk_file), "wb") as out_wave:
+                    out_wave.setnchannels(n_channels)
+                    out_wave.setsampwidth(sampwidth)
+                    out_wave.setframerate(framerate)
+                    out_wave.writeframes(frames)
+
+                chunk_files.append(chunk_file)
+                remaining_frames -= frames_to_write
+                chunk_index += 1
+
+    except (wave.Error, EOFError):
+        return []
+
+    return chunk_files
+
+
 def build_summary_prompt(filename, transcript_text):
     prepared_transcript = " ".join(transcript_text.split())
     if len(prepared_transcript) > SUMMARY_MAX_CHARS:
@@ -117,6 +164,51 @@ def transcribe_media_with_groq(file_path, original_filename):
         )
 
     mime_type = mimetypes.guess_type(original_filename)[0] or "application/octet-stream"
+
+    if file_path.suffix.lower() == ".wav" and file_path.stat().st_size > 20 * BYTE_MULTIPLIER:
+        chunk_paths = split_wav_file_to_chunks(file_path, max_chunk_bytes=16 * BYTE_MULTIPLIER)
+        if chunk_paths:
+            transcripts = []
+            try:
+                for index, chunk_path in enumerate(chunk_paths):
+                    with chunk_path.open("rb") as media_file:
+                        response = requests.post(
+                            f"{GROQ_API_BASE_URL}/audio/transcriptions",
+                            headers={"Authorization": f"Bearer {api_key}"},
+                            data={
+                                "model": TRANSCRIPTION_MODEL,
+                                "temperature": "0",
+                                "response_format": "json",
+                            },
+                            files={"file": (f"{original_filename}.part{index}.wav", media_file, mime_type)},
+                            timeout=(30, AI_REQUEST_TIMEOUT_SECONDS),
+                        )
+
+                    if not response.ok:
+                        raise AIServiceError(extract_error_message(response))
+
+                    payload = response.json()
+                    chunk_text = (payload.get("text") or "").strip()
+                    if not chunk_text:
+                        raise AIServiceError(
+                            "Transcription succeeded, but one of the WAV chunks returned no transcript text."
+                        )
+                    transcripts.append(chunk_text)
+
+                return "\n".join(transcripts).strip()
+            finally:
+                parent_dir = chunk_paths[0].parent if chunk_paths else None
+                for chunk_path in chunk_paths:
+                    try:
+                        if chunk_path.exists():
+                            chunk_path.unlink()
+                    except Exception:
+                        pass
+                if parent_dir and parent_dir.exists():
+                    try:
+                        parent_dir.rmdir()
+                    except Exception:
+                        pass
 
     with file_path.open("rb") as media_file:
         response = requests.post(
