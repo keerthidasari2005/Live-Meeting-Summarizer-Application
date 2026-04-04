@@ -190,29 +190,30 @@ def send_email_via_resend(to_email, subject, content):
 def send_email(to_email, subject, content):
     smtp_settings = get_smtp_settings()
     errors = []
+    resend_key = get_env_value("RESEND_API_KEY")
+
+    if resend_key:
+        try:
+            return send_email_via_resend(to_email, subject, content)
+        except EmailServiceError as error:
+            errors.append(str(error))
 
     if is_smtp_configured(smtp_settings):
         try:
             return send_email_via_smtp(to_email, subject, content)
         except EmailServiceError as error:
             errors.append(str(error))
-    elif has_partial_smtp_config(smtp_settings):
+    elif not resend_key and has_partial_smtp_config(smtp_settings):
         errors.append(
             "SMTP config is incomplete. Set MAIL_SERVER, MAIL_PORT, MAIL_FROM, "
             "and both MAIL_USERNAME and MAIL_PASSWORD if your provider requires login."
         )
 
-    if get_env_value("RESEND_API_KEY"):
-        try:
-            return send_email_via_resend(to_email, subject, content)
-        except EmailServiceError as error:
-            errors.append(str(error))
-
     if errors:
         raise EmailServiceError(" ".join(errors))
 
     raise EmailServiceError(
-        "Email delivery is not configured. Add MAIL_* / SMTP_* variables on Render or set RESEND_API_KEY."
+        "Email delivery is not configured. Add RESEND_API_KEY or complete MAIL_* / SMTP_* settings."
     )
 
 
