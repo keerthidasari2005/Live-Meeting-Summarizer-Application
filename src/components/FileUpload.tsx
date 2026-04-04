@@ -208,30 +208,16 @@ export function FileUpload() {
       throw new Error("Upload session could not be created.");
     }
 
-    const encodeChunkToBase64 = async (chunk: Blob) => {
-      const buffer = await chunk.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      let binary = "";
-      const BATCH_SIZE = 0x8000;
-      for (let i = 0; i < bytes.length; i += BATCH_SIZE) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + BATCH_SIZE));
-      }
-      return btoa(binary);
-    };
-
     const uploadChunk = async (index: number) => {
       const chunk = file.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE);
-      const chunk_data = await encodeChunkToBase64(chunk);
+      const formData = new FormData();
+      formData.append("upload_id", uploadId);
+      formData.append("chunk_index", String(index));
+      formData.append("chunk", chunk, `${file.name}.part-${index}`);
+
       const response = await fetch(`${API_BASE_URL}/upload_chunk`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          upload_id: uploadId,
-          chunk_index: index,
-          chunk_data,
-        }),
+        body: formData,
       });
 
       if (!response.ok) {

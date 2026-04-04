@@ -27,3 +27,7 @@ backend/storage/
 *.njsproj
 *.sln
 *.sw?
+
+# Python bytecode
+__pycache__/
+*.py[cod]
