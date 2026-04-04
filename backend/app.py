@@ -367,12 +367,27 @@ def create_app():
     @app.route("/upload_chunk", methods=["POST"])
     @app.route("/api/upload_chunk", methods=["POST"])
     def upload_chunk():
-        data = request.get_json(silent=True) or {}
-        upload_id = str(data.get("upload_id") or "").strip()
-        chunk_index = int(data.get("chunk_index") or -1)
-        chunk_data = str(data.get("chunk_data") or "").strip()
+        upload_id = ""
+        chunk_index = -1
+        chunk_data = ""
+        chunk_file = request.files.get("chunk")
 
-        if not upload_id or chunk_index < 0 or not chunk_data:
+        if chunk_file is not None:
+            upload_id = str(request.form.get("upload_id") or "").strip()
+            try:
+                chunk_index = int(request.form.get("chunk_index") or -1)
+            except ValueError:
+                chunk_index = -1
+        else:
+            data = request.get_json(silent=True) or {}
+            upload_id = str(data.get("upload_id") or "").strip()
+            try:
+                chunk_index = int(data.get("chunk_index") or -1)
+            except (ValueError, TypeError):
+                chunk_index = -1
+            chunk_data = str(data.get("chunk_data") or "").strip()
+
+        if not upload_id or chunk_index < 0 or (chunk_file is None and not chunk_data):
             return jsonify({"success": False, "error": "Invalid chunk data."}), 400
 
         upload_dir = Path(app.config["UPLOAD_FOLDER"]) / upload_id
@@ -387,12 +402,18 @@ def create_app():
         with metadata_path.open("r") as f:
             metadata = json.load(f)
 
-        # Save chunk
-        chunk_path = upload_dir / f"chunk_{chunk_index}.b64"
-        with chunk_path.open("w") as f:
-            f.write(chunk_data)
+        chunk_path = upload_dir / f"chunk_{chunk_index}.bin"
+        if chunk_file is not None:
+            chunk_file.save(chunk_path)
+        else:
+            import base64
+            try:
+                chunk_bytes = base64.b64decode(chunk_data)
+            except Exception:
+                return jsonify({"success": False, "error": "Invalid base64 chunk data."}), 400
+            with chunk_path.open("wb") as f:
+                f.write(chunk_bytes)
 
-        # Update metadata
         metadata["chunks"][str(chunk_index)] = True
         metadata["uploaded_chunks"] = len(metadata["chunks"])
 
@@ -434,24 +455,30 @@ def create_app():
                 "error": f"Upload incomplete. {metadata['uploaded_chunks']}/{metadata['total_chunks']} chunks uploaded."
             }), 400
 
-        # Reconstruct file from base64 chunks
+        # Reconstruct file from uploaded chunks
         final_filename = f"{uuid4().hex}_{sanitize_filename(metadata['filename'])}"
         final_path = Path(app.config["UPLOAD_FOLDER"]) / final_filename
 
         try:
             with final_path.open("wb") as final_file:
                 for i in range(metadata["total_chunks"]):
-                    chunk_path = upload_dir / f"chunk_{i}.b64"
-                    if not chunk_path.exists():
-                        raise ValueError(f"Chunk {i} missing")
+                    b64_chunk_path = upload_dir / f"chunk_{i}.b64"
+                    bin_chunk_path = upload_dir / f"chunk_{i}.bin"
 
-                    with chunk_path.open("r") as chunk_file:
-                        chunk_data = chunk_file.read().strip()
+                    if bin_chunk_path.exists():
+                        with bin_chunk_path.open("rb") as chunk_file:
+                            final_file.write(chunk_file.read())
+                        continue
 
-                    # Decode base64 chunk
-                    import base64
-                    chunk_bytes = base64.b64decode(chunk_data)
-                    final_file.write(chunk_bytes)
+                    if b64_chunk_path.exists():
+                        with b64_chunk_path.open("r") as chunk_file:
+                            chunk_data = chunk_file.read().strip()
+                        import base64
+                        chunk_bytes = base64.b64decode(chunk_data)
+                        final_file.write(chunk_bytes)
+                        continue
+
+                    raise ValueError(f"Chunk {i} missing")
 
             # Clean up upload directory
             import shutil

@@ -182,26 +182,7 @@ export function FileUpload() {
     const CHUNK_SIZE = 1024 * 1024; // 1MB chunks to stay well under Vercel limits
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-    // Convert file to base64
-    const base64Data = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const result = reader.result as string;
-        // Remove the data URL prefix (data:mime/type;base64,)
-        const base64 = result.split(',')[1];
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
-    // Split base64 into chunks
-    const base64Chunks: string[] = [];
-    for (let i = 0; i < base64Data.length; i += CHUNK_SIZE) {
-      base64Chunks.push(base64Data.slice(i, i + CHUNK_SIZE));
-    }
-
-    // Initialize upload
+    // Initialize upload session
     const initResponse = await fetch(`${API_BASE_URL}/upload_init`, {
       method: "POST",
       headers: {
@@ -209,7 +190,7 @@ export function FileUpload() {
       },
       body: JSON.stringify({
         filename: file.name,
-        total_chunks: base64Chunks.length,
+        total_chunks: totalChunks,
         file_size: file.size,
         mime_type: file.type,
       }),
@@ -223,18 +204,22 @@ export function FileUpload() {
     const initData = await initResponse.json();
     const uploadId = initData.upload_id;
 
-    // Upload chunks
-    for (let i = 0; i < base64Chunks.length; i++) {
+    if (!uploadId) {
+      throw new Error("Upload session could not be created.");
+    }
+
+    for (let i = 0; i < totalChunks; i += 1) {
+      const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+      const formData = new FormData();
+      formData.append("chunk", chunk, file.name);
+      formData.append("upload_id", uploadId);
+      formData.append("chunk_index", String(i));
+      formData.append("total_chunks", String(totalChunks));
+      formData.append("filename", file.name);
+
       const response = await fetch(`${API_BASE_URL}/upload_chunk`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          upload_id: uploadId,
-          chunk_index: i,
-          chunk_data: base64Chunks[i],
-        }),
+        body: formData,
       });
 
       if (!response.ok) {
@@ -242,12 +227,11 @@ export function FileUpload() {
         throw new Error(responseData.error || responseData.message || `Chunk ${i} upload failed.`);
       }
 
-      setUploadProgress(Math.round(((i + 1) / base64Chunks.length) * 100 * 0.6));
+      setUploadProgress(Math.round(((i + 1) / totalChunks) * 100 * 0.6));
     }
 
     setUploadProgress(60);
 
-    // Process the uploaded file
     const processResponse = await fetch(`${API_BASE_URL}/process_upload`, {
       method: "POST",
       headers: {
