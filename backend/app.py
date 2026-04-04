@@ -1,16 +1,12 @@
-import base64
 import logging
 import mimetypes
 import os
-import smtplib
 import tempfile
 import wave
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 from uuid import uuid4
 
+import resend
 import requests
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -50,68 +46,31 @@ class EmailServiceError(RuntimeError):
     pass
 
 
-def safe_bool(value, default=False):
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+resend.api_key = os.getenv("RESEND_API_KEY", "").strip()
 
 
-def send_export_email(to_email, report_title, file_name, file_content_base64, mime_type):
-    """Send export report via email using SMTP."""
-    smtp_server = (os.getenv("SMTP_SERVER") or os.getenv("MAIL_SERVER") or "").strip()
-    smtp_port = int(os.getenv("SMTP_PORT") or os.getenv("MAIL_PORT") or "587")
-    smtp_username = (os.getenv("SMTP_USERNAME") or os.getenv("MAIL_USERNAME") or "").strip()
-    smtp_password = (os.getenv("SMTP_PASSWORD") or os.getenv("MAIL_PASSWORD") or "").strip()
-    from_email = (
-        os.getenv("FROM_EMAIL")
-        or os.getenv("MAIL_FROM")
-        or smtp_username
-        or "noreply@meetingmind.app"
-    ).strip()
-    use_tls = safe_bool(os.getenv("SMTP_USE_TLS") or os.getenv("MAIL_USE_TLS") or "true")
-    use_ssl = safe_bool(os.getenv("SMTP_USE_SSL") or os.getenv("MAIL_USE_SSL") or "false")
-
-    if not smtp_server or not smtp_username or not smtp_password:
+def send_email(to_email, subject, content):
+    if not resend.api_key:
         raise EmailServiceError(
-            "Email service not configured. Please set SMTP_SERVER, SMTP_USERNAME, and SMTP_PASSWORD in environment variables."
+            "Email service not configured. Please set RESEND_API_KEY in environment variables."
         )
 
     if not to_email or "@" not in to_email:
         raise EmailServiceError("Invalid recipient email address.")
 
+    if not content:
+        raise EmailServiceError("Email content is required.")
+
+    from_email = os.getenv("FROM_EMAIL", "onboarding@resend.dev").strip()
+
     try:
-        msg = MIMEMultipart()
-        msg["From"] = from_email
-        msg["To"] = to_email
-        msg["Subject"] = f"MeetingMind Export: {report_title}"
-
-        body = f"Your meeting summary export is attached.\n\nReport: {report_title}\nFile: {file_name}"
-        msg.attach(MIMEText(body, "plain"))
-
-        file_bytes = base64.b64decode(file_content_base64)
-        attachment = MIMEApplication(file_bytes, _subtype=mime_type.split("/")[-1])
-        attachment.add_header("Content-Disposition", "attachment", filename=file_name)
-        msg.attach(attachment)
-
-        if use_ssl or smtp_port == 465:
-            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30) as server:
-                server.login(smtp_username, smtp_password)
-                server.send_message(msg)
-        else:
-            with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
-                server.ehlo()
-                if use_tls:
-                    server.starttls()
-                    server.ehlo()
-                server.login(smtp_username, smtp_password)
-                server.send_message(msg)
-
-        return {"success": True, "message": f"Export sent to {to_email}"}
-
-    except smtplib.SMTPAuthenticationError:
-        raise EmailServiceError("SMTP authentication failed. Check your credentials.")
-    except smtplib.SMTPException as e:
-        raise EmailServiceError(f"SMTP error: {str(e)}")
+        resend.Emails.send({
+            "from": from_email,
+            "to": [to_email],
+            "subject": subject,
+            "html": f"<pre>{content}</pre>",
+        })
+        return {"success": True}
     except Exception as e:
         raise EmailServiceError(f"Failed to send email: {str(e)}")
 
@@ -792,38 +751,27 @@ def create_app():
     def send_export_email_endpoint():
         data = request.get_json(silent=True) or {}
         to_email = str(data.get("to_email") or "").strip()
-        report_title = str(data.get("report_title") or "Meeting Report").strip()
-        file_name = str(data.get("file_name") or "report").strip()
-        file_content_base64 = str(data.get("file_content_base64") or "").strip()
-        mime_type = str(data.get("mime_type") or "application/pdf").strip()
+        report_text = str(data.get("report_text") or "").strip()
 
         if not to_email:
             return jsonify({
-                "success": False,
                 "error": "Recipient email is required."
             }), 400
 
-        if not file_content_base64:
+        if not report_text:
             return jsonify({
-                "success": False,
-                "error": "File content is required."
+                "error": "Report content is required."
             }), 400
 
         try:
-            result = send_export_email(to_email, report_title, file_name, file_content_base64, mime_type)
-            return jsonify(result), 200
+            send_email(to_email, "Meeting Summary", report_text)
+            return jsonify({"success": True}), 200
         except EmailServiceError as e:
             app.logger.warning("Email export failed: %s", e)
-            return jsonify({
-                "success": False,
-                "error": str(e)
-            }), 502
+            return jsonify({"error": str(e)}), 502
         except Exception as e:
             app.logger.error("Unexpected error in email export: %s", e)
-            return jsonify({
-                "success": False,
-                "error": "Failed to send export email."
-            }), 500
+            return jsonify({"error": "Failed to send export email."}), 500
 
     @app.errorhandler(RequestEntityTooLarge)
     def handle_large_file(_error):

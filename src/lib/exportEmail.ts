@@ -1,5 +1,5 @@
 import { normalizeEmail } from "@/lib/auth";
-import { buildReportExportFile, type ExportReportOptions } from "@/lib/reportExport";
+import type { ExportReportOptions } from "@/lib/reportExport";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
@@ -50,28 +50,6 @@ async function getBackendReachabilityError() {
   return new Error("Could not reach the mail backend. Start the Flask API with `npm run dev` or `python backend/app.py`.");
 }
 
-function blobToBase64(blob: Blob) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onloadend = () => {
-      if (typeof reader.result !== "string") {
-        reject(new Error("Could not encode the export attachment."));
-        return;
-      }
-
-      const [, encoded = ""] = reader.result.split(",", 2);
-      resolve(encoded);
-    };
-
-    reader.onerror = () => {
-      reject(reader.error || new Error("Could not encode the export attachment."));
-    };
-
-    reader.readAsDataURL(blob);
-  });
-}
-
 export async function sendExportEmail({
   toEmail,
   title,
@@ -80,20 +58,12 @@ export async function sendExportEmail({
   visualSection,
 }: SendExportEmailOptions) {
   const normalizedEmail = normalizeEmail(toEmail);
-  const exportFile = await buildReportExportFile({
-    title,
-    reportText,
-    format,
-    visualSection,
-  });
-  const fileContentBase64 = await blobToBase64(exportFile.blob);
   const requestBody = JSON.stringify({
     to_email: normalizedEmail,
     report_title: title,
+    report_text: reportText,
     export_format: format,
-    file_name: exportFile.fileName,
-    file_content_base64: fileContentBase64,
-    mime_type: exportFile.mimeType,
+    visual_section: visualSection,
   });
 
   let lastNetworkError: unknown = null;
@@ -116,7 +86,6 @@ export async function sendExportEmail({
 
       return {
         ...payload,
-        fileName: exportFile.fileName,
         toEmail: normalizedEmail,
       };
     } catch (error) {
