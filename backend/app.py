@@ -1,8 +1,13 @@
+import base64
 import logging
 import mimetypes
 import os
+import smtplib
 import tempfile
 import wave
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from pathlib import Path
 from uuid import uuid4
 
@@ -39,6 +44,55 @@ SUMMARY_MAX_CHARS = int(os.getenv("SUMMARY_MAX_CHARS", "30000"))
 
 class AIServiceError(RuntimeError):
     pass
+
+
+class EmailServiceError(RuntimeError):
+    pass
+
+
+def send_export_email(to_email, report_title, file_name, file_content_base64, mime_type):
+    """Send export report via email using SMTP."""
+    smtp_server = os.getenv("SMTP_SERVER", "").strip()
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = os.getenv("SMTP_USERNAME", "").strip()
+    smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
+    from_email = os.getenv("FROM_EMAIL", smtp_username or "noreply@meetingmind.app").strip()
+
+    if not smtp_server or not smtp_username or not smtp_password:
+        raise EmailServiceError(
+            "Email service not configured. Please set SMTP_SERVER, SMTP_USERNAME, and SMTP_PASSWORD in environment variables."
+        )
+
+    if not to_email or "@" not in to_email:
+        raise EmailServiceError("Invalid recipient email address.")
+
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = from_email
+        msg["To"] = to_email
+        msg["Subject"] = f"MeetingMind Export: {report_title}"
+
+        body = f"Your meeting summary export is attached.\n\nReport: {report_title}\nFile: {file_name}"
+        msg.attach(MIMEText(body, "plain"))
+
+        file_bytes = base64.b64decode(file_content_base64)
+        attachment = MIMEApplication(file_bytes, _subtype=mime_type.split("/")[-1])
+        attachment.add_header("Content-Disposition", "attachment", filename=file_name)
+        msg.attach(attachment)
+
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
+            server.starttls()
+            server.login(smtp_username, smtp_password)
+            server.send_message(msg)
+
+        return {"success": True, "message": f"Export sent to {to_email}"}
+
+    except smtplib.SMTPAuthenticationError:
+        raise EmailServiceError("SMTP authentication failed. Check your credentials.")
+    except smtplib.SMTPException as e:
+        raise EmailServiceError(f"SMTP error: {str(e)}")
+    except Exception as e:
+        raise EmailServiceError(f"Failed to send email: {str(e)}")
 
 
 def resolve_upload_folder():
@@ -711,6 +765,44 @@ def create_app():
                 "error": "Chat service error.",
                 "response": "I'm having trouble connecting right now. Please try again in a moment."
             }), 502
+
+    @app.route("/send-export-email", methods=["POST"])
+    @app.route("/api/send-export-email", methods=["POST"])
+    def send_export_email_endpoint():
+        data = request.get_json(silent=True) or {}
+        to_email = str(data.get("to_email") or "").strip()
+        report_title = str(data.get("report_title") or "Meeting Report").strip()
+        file_name = str(data.get("file_name") or "report").strip()
+        file_content_base64 = str(data.get("file_content_base64") or "").strip()
+        mime_type = str(data.get("mime_type") or "application/pdf").strip()
+
+        if not to_email:
+            return jsonify({
+                "success": False,
+                "error": "Recipient email is required."
+            }), 400
+
+        if not file_content_base64:
+            return jsonify({
+                "success": False,
+                "error": "File content is required."
+            }), 400
+
+        try:
+            result = send_export_email(to_email, report_title, file_name, file_content_base64, mime_type)
+            return jsonify(result), 200
+        except EmailServiceError as e:
+            app.logger.warning("Email export failed: %s", e)
+            return jsonify({
+                "success": False,
+                "error": str(e)
+            }), 502
+        except Exception as e:
+            app.logger.error("Unexpected error in email export: %s", e)
+            return jsonify({
+                "success": False,
+                "error": "Failed to send export email."
+            }), 500
 
     @app.errorhandler(RequestEntityTooLarge)
     def handle_large_file(_error):
